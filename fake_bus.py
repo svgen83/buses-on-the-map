@@ -1,31 +1,25 @@
 import os
 import json
 import random
-import argparse
-import logging
 import trio
+import logging
 from itertools import cycle, islice
-from trio_websocket import open_websocket_url
+from functools import wraps
+from trio_websocket import open_websocket_url, ConnectionClosed, HandshakeError
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--server', default='ws://127.0.0.1:8080')
-    parser.add_argument('--routes_number', type=int, default=None)
-    parser.add_argument('--buses_per_route', type=int, default=3)
-    parser.add_argument('--websockets_number', type=int, default=10)
-    parser.add_argument('--emulator_id', default='')
-    parser.add_argument('--refresh_timeout', type=float, default=1.0)
-    parser.add_argument('-v', '--verbose', action='count', default=0)
-    return parser.parse_args()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+log = logging.getLogger(__name__)
 
 
-def setup_logging(verbosity):
-    levels = [logging.WARNING, logging.INFO, logging.DEBUG]
-    level = levels[min(verbosity, len(levels)-1)]
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(levelname)s - %(message)s')
+NUM_BUSES = 20000
+NUM_WORKERS = 10
+SEND_INTERVAL = 1
+MAX_ROUTES = None
+URL = 'ws://127.0.0.1:8080'
 
 
 def load_routes(directory_path='routes'):
@@ -36,9 +30,7 @@ def load_routes(directory_path='routes'):
                 yield json.load(f)
 
 
-def generate_bus_id(emulator_id, route_name, index):
-    if emulator_id:
-        return f"{emulator_id}-{route_name}-{index}"
+def generate_bus_id(route_name, index):
     return f"{route_name}-{index}"
 
 
@@ -50,81 +42,98 @@ async def run_bus(send_channel,
     cycled = cycle(coords)
     shifted = islice(cycled, start_index, None)
     for lat, lng in shifted:
-        msg = {'busId': bus_id,
-               'lat': lat,
-               'lng': lng,
-               'route': route_name}
-        await send_channel.send(msg)
+        msg = {
+            'busId': bus_id,
+            'lat': lat,
+            'lng': lng,
+            'route': route_name,
+        }
+        try:
+            await send_channel.send(msg)
+        except trio.BrokenResourceError:
+            log.warning(f"[{bus_id}] Канал сломан, завершаю задачу")
+            break
         await trio.sleep(interval)
 
 
+def relaunch_on_disconnect(async_func):
+    @wraps(async_func)
+    async def wrapper(*args, **kwargs):
+        while True:
+            try:
+                await async_func(*args, **kwargs)
+            except (
+                ConnectionClosed,
+                HandshakeError,
+                OSError,
+                BrokenPipeError) as e:
+                log.warning(
+                    f"Соединение потеряно ({e}), переподключение через 2 сек...")
+                await trio.sleep(2)
+            except Exception as e:
+                log.error(f"Неизвестная ошибка: {e}")
+                break
+    return wrapper
+
+
+@relaunch_on_disconnect
 async def send_updates(url, receive_channel):
-    try:
-        async with open_websocket_url(url) as ws:
-            while True:
-                msg = await receive_channel.receive()
-                await ws.send_message(
-                    json.dumps(msg, ensure_ascii=False))
-    except OSError as e:
-        logging.error(f"Ошибка подключения: {e}")
+    async with open_websocket_url(url) as ws:
+        log.info("Воркер подключился к серверу")
+        while True:
+            msg = await receive_channel.receive()
+            await ws.send_message(json.dumps(msg, ensure_ascii=False))
 
 
 async def main():
-    args = parse_args()
-    setup_logging(args.verbose)
-
-    all_routes = list(load_routes('routes'))
-    if args.routes_number is not None:
-        routes = all_routes[:args.routes_number]
-    else:
-        routes = all_routes
-
+    routes = list(load_routes('routes'))
+    if MAX_ROUTES is not None:
+        routes = routes[:MAX_ROUTES]
     if not routes:
-        logging.error("Маршруты не найдены в папке 'routes'")
+        log.error("Маршруты не найдены в папке 'routes'")
         return
 
-    logging.info(f"Загружено маршрутов: {len(routes)}")
+    log.info(f"Загружено маршрутов: {len(routes)}")
 
     send_channels = []
     receive_channels = []
-    for _ in range(args.websockets_number):
+    for _ in range(NUM_WORKERS):
         send, receive = trio.open_memory_channel(0)
         send_channels.append(send)
         receive_channels.append(receive)
 
     async with trio.open_nursery() as nursery:
         for recv in receive_channels:
-            nursery.start_soon(
-                send_updates,
-                args.server, recv)
+            nursery.start_soon(send_updates, URL, recv)
 
+        buses_per_route = NUM_BUSES // len(routes) + 1
         bus_counter = 0
         for route in routes:
             coords_len = len(route['coordinates'])
             route_name = route['name']
-            for i in range(args.buses_per_route):
-                bus_id = generate_bus_id(
-                    args.emulator_id,
-                    route_name, i)
-                start_index = random.randint(
-                    0, coords_len - 1)
-                send_channel = random.choice(
-                    send_channels)
+            for i in range(buses_per_route):
+                if bus_counter >= NUM_BUSES:
+                    break
+                bus_id = generate_bus_id(route_name, i)
+                start_index = random.randint(0, coords_len - 1)
+                send_channel = random.choice(send_channels)
                 nursery.start_soon(
-                    run_bus, send_channel,
-                    route, bus_id, start_index,
-                    args.refresh_timeout)
+                    run_bus,
+                    send_channel,
+                    route,
+                    bus_id,
+                    start_index,
+                    SEND_INTERVAL
+                )
                 bus_counter += 1
+            if bus_counter >= NUM_BUSES:
+                break
 
-        logging.info(
-            f"Запущено {bus_counter} автобусов на {args.websockets_number} сокетах")
-
-        try:
-            await trio.sleep_forever()
-        except KeyboardInterrupt:
-            logging.info("Остановка по Ctrl+C")
-            nursery.cancel_scope.cancel()
-
+        log.info(f"Запущено {bus_counter} автобусов на {NUM_WORKERS} сокетах")
+        await trio.sleep_forever()
 
 if __name__ == '__main__':
-    trio.run(main)
+    try:
+        trio.run(main)
+    except KeyboardInterrupt:
+        log.info("Имитатор остановлен пользователем")

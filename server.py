@@ -3,7 +3,6 @@ import trio
 from trio_websocket import serve_websocket, ConnectionClosed
 from functools import partial
 
-
 async def handle_imitation(request, buses):
     ws = await request.accept()
     print("Имитатор подключился")
@@ -20,12 +19,12 @@ async def handle_imitation(request, buses):
                         'lng': data.get('lng'),
                         'route': data.get('route', ''),
                     }
-                    print(f"Обновлён автобус {bus_id}: {data}")
             except json.JSONDecodeError:
-                print(f"Получено некорректное JSON-сообщение: {message}")
+                print(f"Получено некорректное JSON: {message}")
     except ConnectionClosed:
         print("Имитатор отключился")
-
+    except Exception as e:
+        print(f"Ошибка в handle_imitation: {e}")
 
 async def talk_to_browser(request, buses):
     ws = await request.accept()
@@ -41,7 +40,8 @@ async def talk_to_browser(request, buses):
             await trio.sleep(1)
     except ConnectionClosed:
         print("Браузер отключён")
-
+    except Exception as e:
+        print(f"Ошибка в talk_to_browser: {e}")
 
 async def main():
     buses = {}
@@ -62,6 +62,5 @@ async def main():
         )
         await trio.sleep_forever()
 
-        
 if __name__ == '__main__':
     trio.run(main)

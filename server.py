@@ -5,15 +5,30 @@ from trio_websocket import serve_websocket, ConnectionClosed
 from functools import partial
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(levelname)s:%(name)s:%(message)s'
 )
 logger = logging.getLogger(__name__)
 
-logging.getLogger('trio_websocket').setLevel(logging.WARNING)
+for name in logging.root.manager.loggerDict:
+    if name != '__main__':
+        logging.getLogger(name).disabled = True
 
-logger.setLevel(logging.DEBUG)
+def is_inside(bounds, lat, lng):
+    if not bounds:
+        return False
+    return (bounds['south_lat'] <= lat <= bounds['north_lat'] and
+            bounds['west_lng'] <= lng <= bounds['east_lng'])
 
+def filter_buses_by_bounds(buses, bounds):
+    if not bounds:
+        return list(buses.values())
+    
+    filtered = []
+    for bus in buses.values():
+        if is_inside(bounds, bus.get('lat'), bus.get('lng')):
+            filtered.append(bus)
+    return filtered
 
 async def handle_imitation(request, buses):
     ws = await request.accept()
@@ -38,23 +53,24 @@ async def handle_imitation(request, buses):
     except Exception as e:
         logger.error(f"Ошибка в handle_imitation: {e}")
 
-
 async def talk_to_browser(request, buses):
     ws = await request.accept()
     logger.info("Браузер подключён")
     bounds = None
+    
     try:
         async with trio.open_nursery() as nursery:
             async def send_loop():
                 while True:
-                    buses_list = list(buses.values())
+                    filtered_buses = filter_buses_by_bounds(buses, bounds)
+                    if bounds:
+                        logger.debug(f"{len(filtered_buses)} buses inside bounds") 
                     message = {
                         'msgType': 'Buses',
-                        'buses': buses_list,
+                        'buses': filtered_buses,
                     }
                     await ws.send_message(json.dumps(message, ensure_ascii=False))
                     await trio.sleep(1)
-
             async def receive_loop():
                 nonlocal bounds
                 while True:
@@ -69,16 +85,16 @@ async def talk_to_browser(request, buses):
                                 'west_lng': bounds_data.get('west_lng'),
                                 'east_lng': bounds_data.get('east_lng'),
                             }
-                            logger.debug(f"Получены новые границы: {bounds}")                           
+                            logger.debug(f"{msg}")
                     except json.JSONDecodeError:
                         logger.warning(f"Некорректный JSON от браузера: {msg}")
+
             nursery.start_soon(send_loop)
             nursery.start_soon(receive_loop)
     except ConnectionClosed:
         logger.info("Браузер отключён")
     except Exception as e:
         logger.error(f"Ошибка в talk_to_browser: {e}")
-
 
 async def main():
     buses = {}

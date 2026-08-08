@@ -4,15 +4,15 @@ import trio
 from trio_websocket import serve_websocket, ConnectionClosed
 from functools import partial
 
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(levelname)s:%(name)s:%(message)s'
 )
 logger = logging.getLogger(__name__)
 
-
 logging.getLogger('trio_websocket').setLevel(logging.WARNING)
+
+logger.setLevel(logging.DEBUG)
 
 
 async def handle_imitation(request, buses):
@@ -42,6 +42,7 @@ async def handle_imitation(request, buses):
 async def talk_to_browser(request, buses):
     ws = await request.accept()
     logger.info("Браузер подключён")
+    bounds = None
     try:
         async with trio.open_nursery() as nursery:
             async def send_loop():
@@ -55,10 +56,22 @@ async def talk_to_browser(request, buses):
                     await trio.sleep(1)
 
             async def receive_loop():
+                nonlocal bounds
                 while True:
                     msg = await ws.get_message()
-                    logger.debug(f"Получено от браузера: {msg}")
-
+                    try:
+                        data = json.loads(msg)
+                        if data.get('msgType') == 'newBounds':
+                            bounds_data = data.get('data', {})
+                            bounds = {
+                                'south_lat': bounds_data.get('south_lat'),
+                                'north_lat': bounds_data.get('north_lat'),
+                                'west_lng': bounds_data.get('west_lng'),
+                                'east_lng': bounds_data.get('east_lng'),
+                            }
+                            logger.debug(f"Получены новые границы: {bounds}")                           
+                    except json.JSONDecodeError:
+                        logger.warning(f"Некорректный JSON от браузера: {msg}")
             nursery.start_soon(send_loop)
             nursery.start_soon(receive_loop)
     except ConnectionClosed:
@@ -68,9 +81,8 @@ async def talk_to_browser(request, buses):
 
 
 async def main():
-    buses = {}  # общее состояние автобусов
+    buses = {}
     async with trio.open_nursery() as nursery:
-        # Сервер для имитаторов (порт 8080)
         nursery.start_soon(
             serve_websocket,
             partial(handle_imitation, buses=buses),
@@ -78,7 +90,6 @@ async def main():
             8080,
             None
         )
-        # Сервер для браузеров (порт 8000)
         nursery.start_soon(
             serve_websocket,
             partial(talk_to_browser, buses=buses),

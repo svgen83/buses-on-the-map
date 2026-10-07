@@ -1,5 +1,7 @@
 import json
 import logging
+import argparse
+import contextlib
 from dataclasses import dataclass, asdict
 from functools import partial
 
@@ -7,14 +9,15 @@ import trio
 from trio_websocket import serve_websocket, ConnectionClosed
 
 
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(message)s')
-logger = logging.getLogger(__name__)
-
-
-for name in logging.root.manager.loggerDict:
-    if name != __name__:
-        logging.getLogger(name).disabled = True
-logging.root.setLevel(logging.WARNING)
+def setup_logging(verbose: bool):
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format='%(levelname)s:%(name)s:%(message)s')
+    logger = logging.getLogger(__name__)
+    for name in logging.root.manager.loggerDict:
+        if name != __name__:
+            logging.getLogger(name).disabled = True
+    logging.root.setLevel(logging.WARNING)
+    return logger
 
 
 @dataclass
@@ -46,30 +49,23 @@ class WindowBounds:
 def filter_buses_by_bounds(buses_dict: dict[str, Bus], bounds: WindowBounds | None) -> list[Bus]:
     if bounds is None:
         return list(buses_dict.values())
-
-    filtered = []
-    for bus in buses_dict.values():
-        if bounds.is_inside(bus.lat, bus.lng):
-            filtered.append(bus)
-    return filtered
+    return [b for b in buses_dict.values() if bounds.is_inside(b.lat, b.lng)]
 
 
-async def send_buses(ws, bounds: WindowBounds | None, buses: dict[str, Bus]):
+async def send_buses(ws, bounds: WindowBounds | None, buses: dict[str, Bus], logger):
     filtered = filter_buses_by_bounds(buses, bounds)
     if bounds is not None:
         logger.debug(f"{len(filtered)} buses inside bounds")
     else:
-        logger.debug(f"Отправка всех автобусов (границы не заданы)")
-
-    buses_list = [asdict(b) for b in filtered]
+        logger.debug("Отправка всех автобусов (границы не заданы)")
     message = {
         'msgType': 'Buses',
-        'buses': buses_list,
+        'buses': [asdict(b) for b in filtered],
     }
     await ws.send_message(json.dumps(message, ensure_ascii=False))
 
 
-async def handle_imitation(request, buses: dict[str, Bus]):
+async def handle_imitation(request, buses: dict[str, Bus], logger):
     ws = await request.accept()
     logger.info("Имитатор подключился")
     try:
@@ -93,15 +89,16 @@ async def handle_imitation(request, buses: dict[str, Bus]):
         logger.error(f"Ошибка в handle_imitation: {e}")
 
 
-async def talk_to_browser(request, buses: dict[str, Bus]):
+async def talk_to_browser(request, buses: dict[str, Bus], logger):
     ws = await request.accept()
     logger.info("Браузер подключён")
     bounds: WindowBounds | None = None
+
     try:
         async with trio.open_nursery() as nursery:
             async def send_loop():
                 while True:
-                    await send_buses(ws, bounds, buses)
+                    await send_buses(ws, bounds, buses, logger)
                     await trio.sleep(1)
 
             async def receive_loop():
@@ -138,25 +135,37 @@ async def talk_to_browser(request, buses: dict[str, Bus]):
         logger.error(f"Ошибка в talk_to_browser: {e}")
 
 
-async def main():
+async def main(bus_port: int, browser_port: int, verbose: bool):
+    logger = setup_logging(verbose)
     buses: dict[str, Bus] = {}
     async with trio.open_nursery() as nursery:
         nursery.start_soon(
             serve_websocket,
-            partial(handle_imitation, buses=buses),
+            partial(handle_imitation, buses=buses, logger=logger),
             '127.0.0.1',
-            8080,
+            bus_port,
             None
         )
         nursery.start_soon(
             serve_websocket,
-            partial(talk_to_browser, buses=buses),
+            partial(talk_to_browser, buses=buses, logger=logger),
             '127.0.0.1',
-            8000,
+            browser_port,
             None
         )
+        logger.info(f"Сервер запущен: имитаторы на порту {bus_port}, браузеры на порту {browser_port}")
         await trio.sleep_forever()
 
 
 if __name__ == '__main__':
-    trio.run(main)
+    parser = argparse.ArgumentParser(description="Сервер отслеживания автобусов")
+    parser.add_argument('--bus-port', type=int, default=8080,
+                        help='Порт для подключения имитаторов автобусов (по умолчанию 8080)')
+    parser.add_argument('--browser-port', type=int, default=8000,
+                        help='Порт для подключения браузеров (по умолчанию 8000)')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help='Включить отладочный вывод (DEBUG)')
+    args = parser.parse_args()
+
+    with contextlib.suppress(KeyboardInterrupt):
+        trio.run(main, args.bus_port, args.browser_port, args.verbose)

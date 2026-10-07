@@ -9,11 +9,34 @@ import trio
 from trio_websocket import serve_websocket, ConnectionClosed
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Сервер отслеживания автобусов")
+    parser.add_argument(
+        '--bus-port',
+        type=int,
+        default=8080,
+        help='Порт для подключения имитаторов автобусов (по умолчанию 8080)'
+    )
+    parser.add_argument(
+        '--browser-port',
+        type=int,
+        default=8000,
+        help='Порт для подключения браузеров (по умолчанию 8000)'
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Включить отладочный вывод (DEBUG)'
+    )
+    return parser.parse_args()
+
+
 def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format='%(levelname)s:%(name)s:%(message)s')
+    logging.basicConfig(level=level,
+                        format='%(levelname)s:%(name)s:%(message)s')
     logger = logging.getLogger(__name__)
-    # Отключаем спам от библиотек
+
     for name in logging.root.manager.loggerDict:
         if name != __name__:
             logging.getLogger(name).disabled = True
@@ -40,7 +63,9 @@ class WindowBounds:
         return (self.south_lat <= lat <= self.north_lat and
                 self.west_lng <= lng <= self.east_lng)
 
-    def update(self, south_lat: float, north_lat: float, west_lng: float, east_lng: float) -> None:
+    def update(self, south_lat: float,
+               north_lat: float, west_lng: float,
+               east_lng: float):
         self.south_lat = south_lat
         self.north_lat = north_lat
         self.west_lng = west_lng
@@ -112,11 +137,11 @@ async def send_error(ws, errors):
     await ws.send_message(json.dumps(msg, ensure_ascii=False))
     await ws.aclose()
 
-
-def filter_buses_by_bounds(buses_dict: dict, bounds) -> list:
+def filter_buses_by_bounds(buses_dict: dict, bounds):
     if bounds is None:
         return list(buses_dict.values())
-    return [b for b in buses_dict.values() if bounds.is_inside(b.lat, b.lng)]
+    return [
+        b for b in buses_dict.values() if bounds.is_inside(b.lat, b.lng)]
 
 
 async def send_buses(ws, bounds, buses: dict, logger):
@@ -148,7 +173,8 @@ async def handle_imitation(request, buses: dict, logger):
 
             errors = validate_bus_message(data)
             if errors:
-                logger.warning(f"Ошибки валидации от имитатора: {errors}. Данные: {data}")
+                logger.warning(
+                    f"Ошибки валидации от имитатора: {errors}. Данные: {data}")
                 await send_error(ws, errors)
                 return
 
@@ -241,19 +267,13 @@ async def main(bus_port: int, browser_port: int, verbose: bool):
             browser_port,
             None
         )
-        logger.info(f"Сервер запущен: имитаторы на порту {bus_port}, браузеры на порту {browser_port}")
+        logger.info(
+            f"Сервер запущен: имитаторы на порту {
+                bus_port}, браузеры на порту {browser_port}")
         await trio.sleep_forever()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Сервер отслеживания автобусов")
-    parser.add_argument('--bus-port', type=int, default=8080,
-                        help='Порт для подключения имитаторов автобусов (по умолчанию 8080)')
-    parser.add_argument('--browser-port', type=int, default=8000,
-                        help='Порт для подключения браузеров (по умолчанию 8000)')
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help='Включить отладочный вывод (DEBUG)')
-    args = parser.parse_args()
-
+    args = parse_args()
     with contextlib.suppress(KeyboardInterrupt):
         trio.run(main, args.bus_port, args.browser_port, args.verbose)

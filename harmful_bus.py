@@ -38,13 +38,37 @@ async def harmful_bus():
         (json.dumps({"lat": 55.7, "lng": 37.6}), "Нет busId"),
         (json.dumps({"busId": "abc", "lng": 37.6}), "Нет lat"),
         (json.dumps({"busId": "abc", "lat": 55.7}), "Нет lng"),
-        (json.dumps({"busId": "abc", "lat": "55.7", "lng": 37.6}), "lat — строка"),
-        (json.dumps({"busId": "abc", "lat": 55.7, "lng": "37.6"}), "lng — строка"),
-        (json.dumps({"busId": 123, "lat": 55.7, "lng": 37.6}), "busId — число"),
-        (json.dumps({"busId": "abc", "lat": 55.7, "lng": 37.6, "route": 123}), "route — число"),
+        (
+            json.dumps({"busId": "abc", "lat": "55.7", "lng": 37.6}),
+            "lat — строка",
+        ),
+        (
+            json.dumps({"busId": "abc", "lat": 55.7, "lng": "37.6"}),
+            "lng — строка",
+        ),
+        (
+            json.dumps({"busId": 123, "lat": 55.7, "lng": 37.6}),
+            "busId — число",
+        ),
+        (
+            json.dumps({
+                "busId": "abc",
+                "lat": 55.7,
+                "lng": 37.6,
+                "route": 123,
+            }),
+            "route — число",
+        ),
         (json.dumps([1, 2, 3]), "JSON — массив"),
-        (json.dumps({"busId": "abc-0", "lat": 55.7, "lng": 37.6, "route": "156"}),
-         "Корректное сообщение"),
+        (
+            json.dumps({
+                "busId": "abc-0",
+                "lat": 55.7,
+                "lng": 37.6,
+                "route": "156",
+            }),
+            "Корректное сообщение",
+        ),
     ]
 
     for message, label in tests:

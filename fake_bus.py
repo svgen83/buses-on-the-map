@@ -5,7 +5,11 @@ import trio
 import logging
 from itertools import cycle, islice
 from functools import wraps
-from trio_websocket import open_websocket_url, ConnectionClosed, HandshakeError
+from trio_websocket import (
+    open_websocket_url,
+    ConnectionClosed,
+    HandshakeError,
+)
 
 
 logging.basicConfig(
@@ -34,9 +38,13 @@ def generate_bus_id(route_name, index):
     return f"{route_name}-{index}"
 
 
-async def run_bus(send_channel,
-                  route, bus_id,
-                  start_index, interval):
+async def run_bus(
+    send_channel,
+    route,
+    bus_id,
+    start_index,
+    interval,
+):
     coords = route['coordinates']
     route_name = route['name']
     cycled = cycle(coords)
@@ -66,9 +74,12 @@ def relaunch_on_disconnect(async_func):
                 ConnectionClosed,
                 HandshakeError,
                 OSError,
-                BrokenPipeError) as e:
+                BrokenPipeError,
+            ) as e:
                 log.warning(
-                    f"Соединение потеряно ({e}), переподключение через 2 сек...")
+                    f"Соединение потеряно ({e}), "
+                    f"переподключение через 2 сек..."
+                )
                 await trio.sleep(2)
             except Exception as e:
                 log.error(f"Неизвестная ошибка: {e}")
@@ -82,7 +93,8 @@ async def send_updates(url, receive_channel):
         log.info("Воркер подключился к серверу")
         while True:
             msg = await receive_channel.receive()
-            await ws.send_message(json.dumps(msg, ensure_ascii=False))
+            await ws.send_message(
+                json.dumps(msg, ensure_ascii=False))
 
 
 async def main():
@@ -123,14 +135,18 @@ async def main():
                     route,
                     bus_id,
                     start_index,
-                    SEND_INTERVAL
+                    SEND_INTERVAL,
                 )
                 bus_counter += 1
             if bus_counter >= NUM_BUSES:
                 break
 
-        log.info(f"Запущено {bus_counter} автобусов на {NUM_WORKERS} сокетах")
+        log.info(
+            f"Запущено {bus_counter} автобусов "
+            f"на {NUM_WORKERS} сокетах"
+        )
         await trio.sleep_forever()
+
 
 if __name__ == '__main__':
     try:

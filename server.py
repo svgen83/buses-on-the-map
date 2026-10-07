@@ -10,12 +10,13 @@ from trio_websocket import serve_websocket, ConnectionClosed
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Сервер отслеживания автобусов")
+    parser = argparse.ArgumentParser(
+        description="Сервер отслеживания автобусов")
     parser.add_argument(
         '--bus-port',
         type=int,
         default=8080,
-        help='Порт для подключения имитаторов автобусов (по умолчанию 8080)'
+        help='Порт для подключения имитаторов (по умолчанию 8080)'
     )
     parser.add_argument(
         '--browser-port',
@@ -33,8 +34,10 @@ def parse_args():
 
 def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level,
-                        format='%(levelname)s:%(name)s:%(message)s')
+    logging.basicConfig(
+        level=level,
+        format='%(levelname)s:%(name)s:%(message)s'
+    )
     logger = logging.getLogger(__name__)
 
     for name in logging.root.manager.loggerDict:
@@ -63,9 +66,13 @@ class WindowBounds:
         return (self.south_lat <= lat <= self.north_lat and
                 self.west_lng <= lng <= self.east_lng)
 
-    def update(self, south_lat: float,
-               north_lat: float, west_lng: float,
-               east_lng: float):
+    def update(
+        self,
+        south_lat: float,
+        north_lat: float,
+        west_lng: float,
+        east_lng: float,
+    ) -> None:
         self.south_lat = south_lat
         self.north_lat = north_lat
         self.west_lng = west_lng
@@ -137,11 +144,14 @@ async def send_error(ws, errors):
     await ws.send_message(json.dumps(msg, ensure_ascii=False))
     await ws.aclose()
 
-def filter_buses_by_bounds(buses_dict: dict, bounds):
+
+def filter_buses_by_bounds(buses_dict: dict, bounds) -> list:
     if bounds is None:
         return list(buses_dict.values())
     return [
-        b for b in buses_dict.values() if bounds.is_inside(b.lat, b.lng)]
+        b for b in buses_dict.values()
+        if bounds.is_inside(b.lat, b.lng)
+    ]
 
 
 async def send_buses(ws, bounds, buses: dict, logger):
@@ -174,7 +184,9 @@ async def handle_imitation(request, buses: dict, logger):
             errors = validate_bus_message(data)
             if errors:
                 logger.warning(
-                    f"Ошибки валидации от имитатора: {errors}. Данные: {data}")
+                    f"Ошибки валидации от имитатора: {errors}. "
+                    f"Данные: {data}"
+                )
                 await send_error(ws, errors)
                 return
 
@@ -213,13 +225,17 @@ async def talk_to_browser(request, buses: dict, logger):
                     try:
                         data = json.loads(raw)
                     except json.JSONDecodeError:
-                        logger.warning(f"Некорректный JSON от браузера: {raw!r}")
+                        logger.warning(
+                            f"Некорректный JSON от браузера: {raw!r}")
                         await send_error(ws, ["Requires valid JSON"])
                         return
 
                     errors = validate_browser_message(data)
                     if errors:
-                        logger.warning(f"Ошибки валидации от браузера: {errors}. Данные: {data}")
+                        logger.warning(
+                            f"Ошибки валидации от браузера: {errors}. "
+                            f"Данные: {data}"
+                        )
                         await send_error(ws, errors)
                         return
 
@@ -268,8 +284,9 @@ async def main(bus_port: int, browser_port: int, verbose: bool):
             None
         )
         logger.info(
-            f"Сервер запущен: имитаторы на порту {
-                bus_port}, браузеры на порту {browser_port}")
+            f"Сервер запущен: имитаторы на порту {bus_port}, "
+            f"браузеры на порту {browser_port}"
+        )
         await trio.sleep_forever()
 
 

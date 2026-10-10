@@ -103,14 +103,14 @@ python server.py --bus-port 9090 --browser-port 9000 -v
 
 ### В случае появления ошибки от имитатора автобуса появляются сообщения:
 
-Невалидный JSON	- Requires valid JSON
-Нет busId	- Requires busId specified
-busId не строка	- busId must be a string
-Нет координаты lat -	Requires lat specified
-lat не число	- lat must be a number
-Нет координаты lng - Requires lng specified
-lng не число	- lng must be a number
-route не строка	- route must be a string
+Невалидный JSON	- Requires valid JSON  
+Нет busId	- Requires busId specified  
+busId не строка	- busId must be a string  
+Нет координаты lat -	Requires lat specified  
+lat не число	- lat must be a number  
+Нет координаты lng - Requires lng specified  
+lng не число	- lng must be a number  
+route не строка	- route must be a string  
 
 ### При ошибке со стороны браузер появляются следующие сообщения:
 

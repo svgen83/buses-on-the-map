@@ -114,12 +114,12 @@ route не строка	- route must be a string
 
 ### При ошибке со стороны браузер появляются следующие сообщения:
 
-Невалидный JSON	- Requires valid JSON
-Нет msg - Type	Requires msgType specified
-Неизвестный msg - Type	Unknown msgType: <тип>
-Нет объекта data для newBounds	- Requires 'data' object for newBounds
-Отсутствует координата	- Missing '<ключ>' in data
-Координата не число	- '<ключ>' must be a number
+Невалидный JSON	- Requires valid JSON  
+Нет msg - Type	Requires msgType specified  
+Неизвестный msg - Type	Unknown msgType: <тип>  
+Нет объекта data для newBounds	- Requires 'data' object for newBounds  
+Отсутствует координата	- Missing '<ключ>' in data  
+Координата не число	- '<ключ>' must be a number  
 
 ## Тестирование
 

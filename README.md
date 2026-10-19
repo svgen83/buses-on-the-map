@@ -138,6 +138,7 @@ python harmful_bus.py
 
 - trio — асинхронный фреймворк
 - trio-websocket — WebSocket-сервер и клиент для Trio
+- pydantic v2 — валидация данных и модели
 - [Leaflet](https://leafletjs.com/) — отрисовка карты
 - [loglevel](https://www.npmjs.com/package/loglevel) для логгирования
 

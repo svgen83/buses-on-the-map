@@ -1,2 +1,4 @@
 trio==0.33.0
 trio-websocket==0.12.2
+pydantic==2.14.1
+

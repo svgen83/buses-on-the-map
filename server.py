@@ -1,33 +1,35 @@
-import json
-import logging
 import argparse
 import contextlib
-from dataclasses import dataclass, asdict
+import json
+import logging
 from functools import partial
+from typing import Literal
 
 import trio
-from trio_websocket import serve_websocket, ConnectionClosed
+from pydantic import BaseModel, ValidationError, field_validator
+from trio_websocket import ConnectionClosed, serve_websocket
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Сервер отслеживания автобусов")
+        description="Сервер отслеживания автобусов"
+    )
     parser.add_argument(
         '--bus-port',
         type=int,
         default=8080,
-        help='Порт для подключения имитаторов (по умолчанию 8080)'
+        help='Порт для подключения имитаторов (по умолчанию 8080)',
     )
     parser.add_argument(
         '--browser-port',
         type=int,
         default=8000,
-        help='Порт для подключения браузеров (по умолчанию 8000)'
+        help='Порт для подключения браузеров (по умолчанию 8000)',
     )
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='Включить отладочный вывод (DEBUG)'
+        help='Включить отладочный вывод (DEBUG)',
     )
     return parser.parse_args()
 
@@ -36,7 +38,7 @@ def setup_logging(verbose: bool):
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
-        format='%(levelname)s:%(name)s:%(message)s'
+        format='%(levelname)s:%(name)s:%(message)s',
     )
     logger = logging.getLogger(__name__)
 
@@ -47,96 +49,119 @@ def setup_logging(verbose: bool):
     return logger
 
 
-@dataclass
-class Bus:
+class Bus(BaseModel):
     busId: str
     lat: float
     lng: float
     route: str = ''
 
+    @field_validator('busId', mode='before')
+    @classmethod
+    def validate_bus_id(cls, value):
+        if value is None or value == '':
+            raise ValueError("Requires busId specified")
+        if not isinstance(value, str):
+            raise ValueError("busId must be a string")
+        return value
 
-@dataclass
-class WindowBounds:
+    @field_validator('lat', 'lng', mode='before')
+    @classmethod
+    def validate_number(cls, value, info):
+        if value is None:
+            raise ValueError(
+                f"Requires {info.field_name} specified"
+            )
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{info.field_name} must be a number"
+            )
+        return float(value)
+
+    @field_validator('route', mode='before')
+    @classmethod
+    def validate_route(cls, value):
+        if value is None:
+            return ''
+        if not isinstance(value, str):
+            raise ValueError("route must be a string")
+        return value
+
+
+class WindowBounds(BaseModel):
     south_lat: float
     north_lat: float
     west_lng: float
     east_lng: float
 
-    def is_inside(self, lat: float, lng: float) -> bool:
-        return (self.south_lat <= lat <= self.north_lat and
-                self.west_lng <= lng <= self.east_lng)
+    @field_validator(
+        'south_lat', 'north_lat', 'west_lng', 'east_lng',
+        mode='before',
+    )
+    @classmethod
+    def validate_coord(cls, value, info):
+        if value is None:
+            raise ValueError(
+                f"Missing '{info.field_name}' in data"
+            )
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"'{info.field_name}' must be a number"
+            )
+        return float(value)
+
+    def is_inside(self, lat: float, lng: float):
+        return (
+            self.south_lat <= lat <= self.north_lat
+            and self.west_lng <= lng <= self.east_lng
+        )
 
     def update(
         self,
         south_lat: float,
         north_lat: float,
         west_lng: float,
-        east_lng: float,
-    ) -> None:
+        east_lng: float
+    ):
         self.south_lat = south_lat
         self.north_lat = north_lat
         self.west_lng = west_lng
         self.east_lng = east_lng
 
 
-def validate_bus_message(data):
-    errors = []
-    if not isinstance(data, dict):
-        errors.append("Message must be a JSON object")
-        return errors
-
-    bus_id = data.get('busId')
-    if not bus_id:
-        errors.append("Requires busId specified")
-    elif not isinstance(bus_id, str):
-        errors.append("busId must be a string")
-
-    lat = data.get('lat')
-    if lat is None:
-        errors.append("Requires lat specified")
-    elif not isinstance(lat, (int, float)) or isinstance(lat, bool):
-        errors.append("lat must be a number")
-
-    lng = data.get('lng')
-    if lng is None:
-        errors.append("Requires lng specified")
-    elif not isinstance(lng, (int, float)) or isinstance(lng, bool):
-        errors.append("lng must be a number")
-
-    route = data.get('route')
-    if route is not None and not isinstance(route, str):
-        errors.append("route must be a string")
-
-    return errors
+class NewBoundsMessage(BaseModel):
+    msgType: Literal['newBounds']
+    data: WindowBounds
 
 
-def validate_browser_message(data):
-    errors = []
-    if not isinstance(data, dict):
-        errors.append("Message must be a JSON object")
-        return errors
+def format_validation_errors(exc: ValidationError):
+    messages = []
 
-    msg_type = data.get('msgType')
-    if not msg_type:
-        errors.append("Requires msgType specified")
-        return errors
+    for err in exc.errors():
+        loc = err['loc']
+        field = loc[-1] if loc else ''
+        err_type = err['type']
+        message = err['msg']
 
-    if msg_type == 'newBounds':
-        bdata = data.get('data')
-        if not isinstance(bdata, dict):
-            errors.append("Requires 'data' object for newBounds")
-            return errors
-        required = ['south_lat', 'north_lat', 'west_lng', 'east_lng']
-        for key in required:
-            val = bdata.get(key)
-            if val is None:
-                errors.append(f"Missing '{key}' in data")
-            elif not isinstance(val, (int, float)) or isinstance(val, bool):
-                errors.append(f"'{key}' must be a number")
-    else:
-        errors.append(f"Unknown msgType: {msg_type}")
+        if message.startswith('Value error, '):
+            message = message[len('Value error, '):]
 
-    return errors
+        if err_type == 'missing':
+            if field == 'busId':
+                message = "Requires busId specified"
+            elif field in ('lat', 'lng'):
+                message = f"Requires {field} specified"
+            elif field in (
+                'south_lat', 'north_lat', 'west_lng', 'east_lng',
+            ):
+                message = f"Missing '{field}' in data"
+            elif field == 'data':
+                message = "Requires 'data' object for newBounds"
+        elif err_type == 'model_type' and field == 'data':
+            message = "Requires 'data' object for newBounds"
+
+        messages.append(message)
+
+    return messages
 
 
 async def send_error(ws, errors):
@@ -145,31 +170,40 @@ async def send_error(ws, errors):
     await ws.aclose()
 
 
-def filter_buses_by_bounds(buses_dict: dict, bounds) -> list:
+def filter_buses_by_bounds(
+    buses_dict: dict[str, Bus],
+    bounds: WindowBounds | None
+):
     if bounds is None:
         return list(buses_dict.values())
     return [
-        b for b in buses_dict.values()
-        if bounds.is_inside(b.lat, b.lng)
+        bus for bus in buses_dict.values()
+        if bounds.is_inside(bus.lat, bus.lng)
     ]
 
 
-async def send_buses(ws, bounds, buses: dict, logger):
+async def send_buses(
+    ws, bounds: WindowBounds | None,
+    buses: dict[str, Bus],
+    logger
+):
     filtered = filter_buses_by_bounds(buses, bounds)
     if bounds is not None:
         logger.debug(f"{len(filtered)} buses inside bounds")
     else:
         logger.debug("Отправка всех автобусов (границы не заданы)")
+
     message = {
         'msgType': 'Buses',
-        'buses': [asdict(b) for b in filtered],
+        'buses': [bus.model_dump() for bus in filtered],
     }
     await ws.send_message(json.dumps(message, ensure_ascii=False))
 
 
-async def handle_imitation(request, buses: dict, logger):
+async def handle_imitation(request, buses: dict[str, Bus], logger):
     ws = await request.accept()
     logger.info("Имитатор подключился")
+
     try:
         while True:
             raw = await ws.get_message()
@@ -177,12 +211,26 @@ async def handle_imitation(request, buses: dict, logger):
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                logger.warning(f"Некорректный JSON от имитатора: {raw!r}")
+                logger.warning(
+                    f"Некорректный JSON от имитатора: {raw!r}"
+                )
                 await send_error(ws, ["Requires valid JSON"])
                 return
 
-            errors = validate_bus_message(data)
-            if errors:
+            if not isinstance(data, dict):
+                logger.warning(
+                    "Ожидался JSON-объект от имитатора, "
+                    f"получено: {data!r}"
+                )
+                await send_error(
+                    ws, ["Message must be a JSON object"]
+                )
+                return
+
+            try:
+                bus = Bus.model_validate(data)
+            except ValidationError as exc:
+                errors = format_validation_errors(exc)
                 logger.warning(
                     f"Ошибки валидации от имитатора: {errors}. "
                     f"Данные: {data}"
@@ -190,24 +238,19 @@ async def handle_imitation(request, buses: dict, logger):
                 await send_error(ws, errors)
                 return
 
-            bus_id = data['busId']
-            buses[bus_id] = Bus(
-                busId=bus_id,
-                lat=float(data['lat']),
-                lng=float(data['lng']),
-                route=data.get('route', ''),
-            )
-            logger.debug(f"Обновлён автобус {bus_id}: {data}")
+            buses[bus.busId] = bus
+            logger.debug(f"Обновлён автобус {bus.busId}: {data}")
+
     except ConnectionClosed:
         logger.info("Имитатор отключился")
-    except Exception as e:
-        logger.error(f"Ошибка в handle_imitation: {e}")
+    except Exception as exc:
+        logger.error(f"Ошибка в handle_imitation: {exc}")
 
 
-async def talk_to_browser(request, buses: dict, logger):
+async def talk_to_browser(request, buses: dict[str, Bus], logger):
     ws = await request.accept()
     logger.info("Браузер подключён")
-    bounds = None
+    bounds: WindowBounds | None = None
 
     try:
         async with trio.open_nursery() as nursery:
@@ -219,6 +262,7 @@ async def talk_to_browser(request, buses: dict, logger):
 
             async def receive_loop():
                 nonlocal bounds
+
                 while True:
                     raw = await ws.get_message()
 
@@ -226,63 +270,77 @@ async def talk_to_browser(request, buses: dict, logger):
                         data = json.loads(raw)
                     except json.JSONDecodeError:
                         logger.warning(
-                            f"Некорректный JSON от браузера: {raw!r}")
+                            f"Некорректный JSON от браузера: {raw!r}"
+                        )
                         await send_error(ws, ["Requires valid JSON"])
                         return
 
-                    errors = validate_browser_message(data)
-                    if errors:
+                    if not isinstance(data, dict):
                         logger.warning(
-                            f"Ошибки валидации от браузера: {errors}. "
-                            f"Данные: {data}"
+                            "Ожидался JSON-объект от браузера: "
+                            f"{data!r}"
+                        )
+                        await send_error(
+                            ws, ["Message must be a JSON object"]
+                        )
+                        return
+
+                    msg_type = data.get('msgType')
+                    if not msg_type:
+                        await send_error(
+                            ws, ["Requires msgType specified"]
+                        )
+                        return
+
+                    if msg_type != 'newBounds':
+                        await send_error(
+                            ws, [f"Unknown msgType: {msg_type}"]
+                        )
+                        return
+
+                    try:
+                        message = NewBoundsMessage.model_validate(data)
+                    except ValidationError as exc:
+                        errors = format_validation_errors(exc)
+                        logger.warning(
+                            "Ошибки валидации от браузера: "
+                            f"{errors}. Данные: {data}"
                         )
                         await send_error(ws, errors)
                         return
 
-                    if data['msgType'] == 'newBounds':
-                        bdata = data['data']
-                        if bounds is None:
-                            bounds = WindowBounds(
-                                south_lat=bdata['south_lat'],
-                                north_lat=bdata['north_lat'],
-                                west_lng=bdata['west_lng'],
-                                east_lng=bdata['east_lng'],
-                            )
-                        else:
-                            bounds.update(
-                                south_lat=bdata['south_lat'],
-                                north_lat=bdata['north_lat'],
-                                west_lng=bdata['west_lng'],
-                                east_lng=bdata['east_lng'],
-                            )
-                        logger.debug(f"{raw}")
+                    bounds = message.data
+                    logger.debug(f"{raw}")
 
             nursery.start_soon(send_loop)
             nursery.start_soon(receive_loop)
+
     except ConnectionClosed:
         logger.info("Браузер отключён")
-    except Exception as e:
-        logger.error(f"Ошибка в talk_to_browser: {e}")
+    except Exception as exc:
+        logger.error(f"Ошибка в talk_to_browser: {exc}")
 
 
 async def main(bus_port: int, browser_port: int, verbose: bool):
     logger = setup_logging(verbose)
-    buses: dict = {}
+    buses: dict[str, Bus] = {}
+
     async with trio.open_nursery() as nursery:
         nursery.start_soon(
             serve_websocket,
             partial(handle_imitation, buses=buses, logger=logger),
             '127.0.0.1',
             bus_port,
-            None
+            None,
         )
         nursery.start_soon(
             serve_websocket,
             partial(talk_to_browser, buses=buses, logger=logger),
             '127.0.0.1',
             browser_port,
-            None
+            None,
         )
+
         logger.info(
             f"Сервер запущен: имитаторы на порту {bus_port}, "
             f"браузеры на порту {browser_port}"
